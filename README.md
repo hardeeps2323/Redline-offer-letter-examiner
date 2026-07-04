@@ -1,4 +1,45 @@
-# Redline-offer-letter-examiner
-live link: https://6a48c5c9f7d97f1c0dc61d66--fascinating-gumption-018cfa.netlify.app/
+# Redline – Offer Letter Examiner
 
-Redline – Offer Letter Examiner is an AI-powered web app that analyzes internship and job offer letters for scam indicators. It combines rule-based detection with AI analysis to identify suspicious phrases, calculate a risk score, highlight red flags, and help users verify offers before responding.
+## About
+AI-powered web application that detects fake internship and job offer letters.
+
+## Features
+- Scam Detection
+- Risk Score
+- AI Analysis
+- Highlight Suspicious Text
+- PDF Upload
+- Fast Processing
+
+## Tech Stack
+Frontend:
+- React.js
+- Tailwind CSS
+
+Backend:
+- Python
+- Flask
+
+AI:
+- Gemini API/OpenAI
+- NLP
+
+## Installation
+
+git clone https://github.com/yourusername/redline-offer-letter-examiner.git
+
+cd redline-offer-letter-examiner
+
+npm install
+
+pip install -r requirements.txt
+
+npm start
+
+## Screenshots
+
+(Add screenshots)
+
+## License
+
+MIT License
