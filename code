@@ -1,0 +1,515 @@
+import { useState, useRef } from "react";
+
+const RULES = [
+  {
+    id: "upfront_fee",
+    label: "Upfront payment demanded",
+    severity: "high",
+    weight: 22,
+    keywords: [
+      "registration fee", "security deposit", "processing fee", "training fee",
+      "refundable deposit", "one-time payment", "kit fee", "pay a fee",
+      "deposit amount", "advance payment", "joining fee", "administrative fee",
+    ],
+  },
+  {
+    id: "financial_info",
+    label: "Sensitive financial/personal info requested",
+    severity: "high",
+    weight: 20,
+    keywords: [
+      "bank account number", "otp", "cvv", "aadhaar", "pan card number",
+      "upi pin", "net banking password", "debit card number", "credit card number",
+    ],
+  },
+  {
+    id: "certificate_purchase",
+    label: "Asked to buy materials/certificate/kit",
+    severity: "high",
+    weight: 18,
+    keywords: [
+      "purchase the certificate", "buy the training kit", "buy the kit",
+      "laptop deposit", "purchase a laptop", "buy study material", "id card fee",
+    ],
+  },
+  {
+    id: "generic_domain",
+    label: "Contact from a free/generic email domain",
+    severity: "medium",
+    weight: 14,
+    keywords: [
+      "@gmail.com", "@yahoo.com", "@outlook.com", "@hotmail.com", "@rediffmail.com",
+    ],
+  },
+  {
+    id: "urgency",
+    label: "Pressure or urgency language",
+    severity: "medium",
+    weight: 10,
+    keywords: [
+      "act now", "within 24 hours", "limited slots", "respond immediately",
+      "offer expires today", "hurry", "only a few seats left", "immediate action required",
+    ],
+  },
+  {
+    id: "no_interview",
+    label: "No interview / instant selection",
+    severity: "medium",
+    weight: 10,
+    keywords: [
+      "no interview required", "selected without interview", "instant offer",
+      "direct joining without interview", "without any interview",
+    ],
+  },
+  {
+    id: "unrealistic_pay",
+    label: "Unrealistic pay for no effort/experience",
+    severity: "medium",
+    weight: 9,
+    keywords: [
+      "earn up to", "guaranteed income", "work from home and earn",
+      "easy money", "no skills required and earn",
+    ],
+  },
+  {
+    id: "whatsapp_only",
+    label: "Communication pushed to WhatsApp/personal number only",
+    severity: "medium",
+    weight: 8,
+    keywords: [
+      "whatsapp number only", "contact us only on whatsapp", "message us on whatsapp for further",
+      "only through whatsapp",
+    ],
+  },
+  {
+    id: "vague_role",
+    label: "Vague or generic job description",
+    severity: "low",
+    weight: 6,
+    keywords: [
+      "work as per requirement", "task based job", "flexible work with no fixed role",
+    ],
+  },
+];
+
+const ABSENCE_CHECKS = [
+  {
+    id: "no_company_reg",
+    label: "No verifiable company registration details (CIN/GST/registered office) found in the letter",
+    severity: "low",
+    weight: 6,
+    test: (t) => !/(cin[:\s]|gstin|registered office|corporate identification)/i.test(t),
+  },
+  {
+    id: "no_official_site",
+    label: "No official company website or careers page mentioned",
+    severity: "low",
+    weight: 5,
+    test: (t) => !/(https?:\/\/|www\.)/i.test(t),
+  },
+];
+
+function findMatches(text, keyword) {
+  const lower = text.toLowerCase();
+  const kw = keyword.toLowerCase();
+  const spans = [];
+  let idx = lower.indexOf(kw);
+  while (idx !== -1) {
+    spans.push({ start: idx, end: idx + keyword.length, text: text.slice(idx, idx + keyword.length) });
+    idx = lower.indexOf(kw, idx + keyword.length);
+  }
+  return spans;
+}
+
+function runRuleEngine(text) {
+  const findings = [];
+  let score = 0;
+  RULES.forEach((rule) => {
+    for (const kw of rule.keywords) {
+      const spans = findMatches(text, kw);
+      if (spans.length > 0) {
+        findings.push({
+          quote: spans[0].text,
+          start: spans[0].start,
+          end: spans[0].end,
+          reason: rule.label,
+          severity: rule.severity,
+          source: "rule",
+        });
+        score += rule.weight;
+        break;
+      }
+    }
+  });
+  ABSENCE_CHECKS.forEach((chk) => {
+    if (chk.test(text)) {
+      findings.push({ quote: null, reason: chk.label, severity: chk.severity, source: "rule" });
+      score += chk.weight;
+    }
+  });
+  return { findings, score: Math.min(100, score) };
+}
+
+function severityRank(sev) {
+  return sev === "high" ? 3 : sev === "medium" ? 2 : 1;
+}
+
+function mergeSpans(text, findings) {
+  const withPos = findings
+    .filter((f) => f.quote)
+    .map((f) => {
+      if (f.start !== undefined) return f;
+      const idx = text.toLowerCase().indexOf(f.quote.toLowerCase());
+      if (idx === -1) return null;
+      return { ...f, start: idx, end: idx + f.quote.length };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.start - b.start || severityRank(b.severity) - severityRank(a.severity));
+
+  const kept = [];
+  let lastEnd = -1;
+  for (const span of withPos) {
+    if (span.start >= lastEnd) {
+      kept.push(span);
+      lastEnd = span.end;
+    }
+  }
+  return kept;
+}
+
+const SEVERITY_COLORS = {
+  high: { bg: "#F6DAD5", border: "#A23B32", text: "#7A2A22" },
+  medium: { bg: "#F3E3C3", border: "#C98A2C", text: "#8A5E1D" },
+  low: { bg: "#E4E7DC", border: "#6C7A5E", text: "#4A5540" },
+};
+
+function DocumentView({ text, spans, findings }) {
+  const numbered = findings.filter((f) => f.quote);
+  const nodes = [];
+  let cursor = 0;
+  spans.forEach((span, i) => {
+    if (span.start > cursor) nodes.push(<span key={`t${cursor}`}>{text.slice(cursor, span.start)}</span>);
+    const num = numbered.indexOf(findings.find((f) => f.start === span.start && f.quote === span.quote)) + 1;
+    const c = SEVERITY_COLORS[span.severity];
+    nodes.push(
+      <mark
+        key={`m${span.start}`}
+        title={span.reason}
+        style={{
+          background: c.bg,
+          color: c.text,
+          borderBottom: `2px solid ${c.border}`,
+          padding: "0 2px",
+          borderRadius: 2,
+          cursor: "help",
+          position: "relative",
+        }}
+      >
+        {text.slice(span.start, span.end)}
+        <sup style={{ fontSize: 10, marginLeft: 2, fontWeight: 700 }}>{num}</sup>
+      </mark>
+    );
+    cursor = span.end;
+  });
+  if (cursor < text.length) nodes.push(<span key="tail">{text.slice(cursor)}</span>);
+  return <>{nodes}</>;
+}
+
+function verdictFor(score) {
+  if (score >= 65) return { label: "Likely a scam", color: "#A23B32" };
+  if (score >= 35) return { label: "Suspicious — verify carefully", color: "#C98A2C" };
+  return { label: "Likely genuine", color: "#4C7A5C" };
+}
+
+export default function App() {
+  const [text, setText] = useState("");
+  const [stage, setStage] = useState("idle");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const fileRef = useRef(null);
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setText(String(reader.result || ""));
+    reader.readAsText(file);
+  };
+
+  const examine = async () => {
+    if (!text.trim()) return;
+    setStage("analyzing");
+    setError(null);
+    const rule = runRuleEngine(text);
+    let aiFindings = [];
+    let aiScore = null;
+    let aiSummary = null;
+    try {
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1000,
+          system:
+            "You are a fraud-detection assistant reviewing internship/job offer letters for scam indicators. Respond ONLY with valid JSON, no markdown fences, no preamble. Schema: {\"score\": number 0-100 (risk of being a scam, 100=certainly a scam), \"summary\": string (2-3 sentences), \"findings\": [{\"quote\": string (an exact short substring copied verbatim from the letter, max 10 words), \"reason\": string (why it's suspicious or reassuring), \"severity\": \"high\"|\"medium\"|\"low\"}]}. Include both suspicious findings and, if relevant, a couple of genuinely reassuring signals with low severity labeled clearly as reassuring in the reason. Base quotes strictly on text that appears in the letter.",
+          messages: [{ role: "user", content: `Analyze this offer letter:\n\n${text}` }],
+        }),
+      });
+      const data = await resp.json();
+      const raw = (data.content || [])
+        .filter((b) => b.type === "text")
+        .map((b) => b.text)
+        .join("\n")
+        .trim()
+        .replace(/^```json|```$/g, "")
+        .trim();
+      const parsed = JSON.parse(raw);
+      aiScore = Math.max(0, Math.min(100, Number(parsed.score) || 0));
+      aiSummary = parsed.summary || null;
+      aiFindings = (parsed.findings || []).map((f) => ({
+        quote: f.quote,
+        reason: f.reason,
+        severity: ["high", "medium", "low"].includes(f.severity) ? f.severity : "low",
+        source: "ai",
+      }));
+    } catch (e) {
+      setError("AI analysis unavailable right now — showing rule-based findings only.");
+    }
+
+    const allFindings = [...rule.findings, ...aiFindings];
+    const finalScore =
+      aiScore === null ? rule.score : Math.round(0.45 * rule.score + 0.55 * aiScore);
+
+    const spans = mergeSpans(text, allFindings);
+    setResult({ score: finalScore, findings: allFindings, spans, summary: aiSummary });
+    setStage("done");
+  };
+
+  const reset = () => {
+    setStage("idle");
+    setResult(null);
+    setError(null);
+  };
+
+  return (
+    <div
+      style={{
+        fontFamily: "'Inter', sans-serif",
+        background: "#0F1A2E",
+        minHeight: "100vh",
+        padding: "40px 20px",
+        color: "#EDE9DD",
+      }}
+    >
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap');
+        textarea, button, input[type=file] { font-family: 'Inter', sans-serif; }
+        ::selection { background: #C98A2C55; }
+      `}</style>
+
+      <div style={{ maxWidth: 780, margin: "0 auto" }}>
+        <p style={{ fontSize: 12, letterSpacing: 3, color: "#8FA0BD", margin: "0 0 6px", fontWeight: 600 }}>
+          CASE FILE · OFFER LETTER FORENSICS
+        </p>
+        <h1 style={{ fontFamily: "'Spectral', serif", fontSize: 34, margin: "0 0 8px", fontWeight: 600 }}>
+          Redline
+        </h1>
+        <p style={{ color: "#B7C2D6", fontSize: 15, lineHeight: 1.6, margin: "0 0 32px", maxWidth: 560 }}>
+          Paste an internship or job offer letter below. Redline runs it against known scam
+          patterns and an AI review, then marks up the letter like an examiner's redlined copy —
+          with a risk score and reasons for every flag.
+        </p>
+
+        {stage !== "done" && (
+          <div style={{ background: "#16223A", border: "1px solid #2A3B5C", borderRadius: 10, padding: 20 }}>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Paste the full offer letter text here..."
+              rows={12}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                background: "#0F1A2E",
+                color: "#EDE9DD",
+                border: "1px solid #2A3B5C",
+                borderRadius: 8,
+                padding: 14,
+                fontSize: 14,
+                lineHeight: 1.6,
+                resize: "vertical",
+              }}
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
+              <button
+                onClick={() => fileRef.current?.click()}
+                style={{
+                  background: "transparent",
+                  border: "1px solid #3A4D73",
+                  color: "#B7C2D6",
+                  padding: "9px 16px",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  fontSize: 13,
+                }}
+              >
+                Upload .txt file
+              </button>
+              <input ref={fileRef} type="file" accept=".txt" onChange={handleFile} style={{ display: "none" }} />
+              <div style={{ flex: 1 }} />
+              <button
+                onClick={examine}
+                disabled={!text.trim() || stage === "analyzing"}
+                style={{
+                  background: text.trim() ? "#C98A2C" : "#3A4D73",
+                  color: "#16223A",
+                  border: "none",
+                  padding: "10px 22px",
+                  borderRadius: 6,
+                  cursor: text.trim() ? "pointer" : "default",
+                  fontSize: 14,
+                  fontWeight: 600,
+                }}
+              >
+                {stage === "analyzing" ? "Examining…" : "Examine letter"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {stage === "done" && result && (
+          <div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 20,
+                background: "#16223A",
+                border: "1px solid #2A3B5C",
+                borderRadius: 10,
+                padding: "20px 24px",
+                marginBottom: 20,
+              }}
+            >
+              <div
+                style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 40,
+                  fontWeight: 700,
+                  color: verdictFor(result.score).color,
+                  lineHeight: 1,
+                  minWidth: 90,
+                }}
+              >
+                {result.score}
+              </div>
+              <div>
+                <p style={{ margin: 0, fontSize: 12, color: "#8FA0BD", letterSpacing: 1 }}>RISK SCORE / 100</p>
+                <p style={{ margin: "4px 0 0", fontSize: 18, fontWeight: 600, color: verdictFor(result.score).color }}>
+                  {verdictFor(result.score).label}
+                </p>
+              </div>
+            </div>
+
+            {error && (
+              <p style={{ color: "#C98A2C", fontSize: 13, marginBottom: 16 }}>{error}</p>
+            )}
+
+            {result.summary && (
+              <p style={{ color: "#B7C2D6", fontSize: 14, lineHeight: 1.6, marginBottom: 20 }}>
+                {result.summary}
+              </p>
+            )}
+
+            <div
+              style={{
+                background: "#F6F3EC",
+                color: "#23262B",
+                borderRadius: 10,
+                padding: 24,
+                fontFamily: "'Spectral', serif",
+                fontSize: 15,
+                lineHeight: 1.85,
+                whiteSpace: "pre-wrap",
+                marginBottom: 20,
+              }}
+            >
+              <DocumentView text={text} spans={result.spans} findings={result.findings} />
+            </div>
+
+            <div style={{ background: "#16223A", border: "1px solid #2A3B5C", borderRadius: 10, padding: 20 }}>
+              <p style={{ margin: "0 0 14px", fontSize: 12, letterSpacing: 2, color: "#8FA0BD", fontWeight: 600 }}>
+                FINDINGS
+              </p>
+              {[...result.findings]
+                .sort((a, b) => severityRank(b.severity) - severityRank(a.severity))
+                .map((f, i) => {
+                  const c = SEVERITY_COLORS[f.severity];
+                  const numberedIdx = result.findings.filter((x) => x.quote).indexOf(f);
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        display: "flex",
+                        gap: 12,
+                        padding: "10px 0",
+                        borderTop: i === 0 ? "none" : "1px solid #23324D",
+                        alignItems: "flex-start",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: c.border,
+                          border: `1px solid ${c.border}`,
+                          borderRadius: 4,
+                          padding: "1px 6px",
+                          marginTop: 2,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {f.severity.toUpperCase()}
+                      </span>
+                      <div>
+                        {f.quote && numberedIdx !== -1 && (
+                          <p style={{ margin: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#8FA0BD" }}>
+                            #{numberedIdx + 1} — "{f.quote}"
+                          </p>
+                        )}
+                        <p style={{ margin: "2px 0 0", fontSize: 14, color: "#EDE9DD" }}>{f.reason}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            <button
+              onClick={reset}
+              style={{
+                marginTop: 20,
+                background: "transparent",
+                border: "1px solid #3A4D73",
+                color: "#B7C2D6",
+                padding: "9px 16px",
+                borderRadius: 6,
+                cursor: "pointer",
+                fontSize: 13,
+              }}
+            >
+              Examine another letter
+            </button>
+          </div>
+        )}
+
+        <p style={{ marginTop: 32, fontSize: 12, color: "#6B7A96", lineHeight: 1.6 }}>
+          This is an automated screening tool, not legal or definitive proof of fraud. Always
+          verify an offer independently through the company's official careers page or HR
+          contact before paying any money or sharing personal documents.
+        </p>
+      </div>
+    </div>
+  );
+}
